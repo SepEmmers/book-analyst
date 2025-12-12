@@ -1,8 +1,8 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { BookOpen, Upload, FileText, X, Layers, Globe, Plus, FolderOpen, Home, Share2, Check, User as UserIcon, LogOut, Copy, Trash2 } from 'lucide-react';
+import { BookOpen, Upload, FileText, X, Layers, Globe, Plus, FolderOpen, Home, Share2, Check, User as UserIcon, LogOut, Copy, Trash2, Edit2, Moon, Sun, Monitor } from 'lucide-react';
 import { analyzeBookAdvanced } from './utils/analysis';
 import { parseFile } from './utils/fileParsers';
-import { supabase, checkSupabaseConfig } from './lib/supabase';
+import { supabase } from './lib/supabase';
 import { predictGenre } from './utils/gamification';
 import OverviewTab from './components/dashboard/OverviewTab';
 import SentimentTab from './components/dashboard/SentimentTab';
@@ -14,10 +14,17 @@ import StatDetailModal from './components/dashboard/StatDetailModal';
 import HomePage from './components/HomePage';
 import LoginPage from './components/auth/LoginPage';
 import ProfilePage from './components/dashboard/ProfilePage';
+import PublishModal from './components/dashboard/PublishModal';
+import { ToastContainer } from './components/ui/Toast';
+import ConfirmDialog from './components/ui/ConfirmDialog';
+import { useUI } from './context/UIContext';
 import clsx from 'clsx';
 import { LANGUAGES } from './constants/dictionaries';
+import { validateBookTitle } from './utils/validation';
 
 const App = () => {
+  const { theme, toggleTheme, language, switchLanguage, t, showToast, confirm } = useUI();
+
   const [currentView, setCurrentView] = useState('home'); // 'home', 'dashboard', 'login', 'profile'
   const [files, setFiles] = useState([]);
   const [series, setSeries] = useState([]); 
@@ -38,6 +45,7 @@ const App = () => {
 
   // Modal & Selection State
   const [statModalData, setStatModalData] = useState(null); 
+  const [publishModalOpen, setPublishModalOpen] = useState(false); // Add Modal State
 
   useEffect(() => {
     // Check Auth
@@ -79,7 +87,7 @@ const App = () => {
           }
       } catch (err) {
           console.error("Error loading shared book:", err);
-          alert("Kon gedeeld boek niet laden. Misschien is het verwijderd?");
+          showToast("Kon gedeeld boek niet laden.", "error");
       } finally {
           setAnalyzing(false);
       }
@@ -109,6 +117,7 @@ const App = () => {
           }
         } catch (error) {
            console.error("Error parsing file:", file.name, error);
+           showToast(`Fout bij laden ${file.name}`, 'error');
         }
       }
     }
@@ -122,13 +131,49 @@ const App = () => {
     setAnalyzing(false);
   };
 
-  const handleSaveToCloud = async (isPublic = false) => {
-      if (!activeItem || selectedType !== 'book' || !supabase) return;
+  const initiatePublish = async () => {
+       if (!activeItem || selectedType !== 'book') return;
+       if (!user) {
+          const wantsLogin = await confirm(t('app.publish'), t('app.loginRequired'));
+          if (wantsLogin) setCurrentView('login');
+          return;
+       }
+       setPublishModalOpen(true);
+  };
+
+  const handleConfirmPublish = async (title, author) => {
+      // Called when user clicks "Nu Publiceren" in modal
+      setPublishModalOpen(false);
+      
+      // Update local state temporarily (optimistic)
+      if (activeItem.name !== title || activeItem.author !== author) {
+          setFiles(prev => prev.map(f => f.id === activeItem.id ? { ...f, name: title, author: author } : f));
+      }
+      
+      // Proceed to cloud save
+      await handleSaveToCloud(true, title, author);
+  };
+
+  const handleSaveToCloud = async (isPublic = false, finalTitle = null, finalAuthor = null) => {
+      // If Public and no title/author provided (direct call), redirect to modal initiation logic
+      if (isPublic && (!finalTitle || !finalAuthor)) {
+           initiatePublish();
+           return;
+      }
+
+      // If Private, use current name and default author
+      const titleToSave = finalTitle || activeItem.name;
+      const authorToSave = finalAuthor || activeItem.author || 'Onbekend';
+
+      const titleValidation = validateBookTitle(titleToSave);
+      if (!titleValidation.valid) {
+          showToast(t('publish.invalidTitle') + " " + titleValidation.error, 'error');
+          return;
+      }
       
       if (!user) {
-          if (confirm("Je moet ingelogd zijn. Wil je nu inloggen?")) {
-              setCurrentView('login');
-          }
+          const wantsLogin = await confirm(t('app.share'), t('app.loginRequired'));
+          if (wantsLogin) setCurrentView('login');
           return;
       }
 
@@ -137,8 +182,8 @@ const App = () => {
           const genre = predictGenre(activeItem.analysis);
           
           const payload = {
-              title: activeItem.name,
-              author: 'Onbekend', 
+              title: titleToSave,
+              author: authorToSave, 
               genre: genre,
               analysis_json: activeItem.analysis,
               likes_count: 0,
@@ -153,22 +198,61 @@ const App = () => {
           if (!isPublic && data) {
                const link = `${window.location.origin}/?id=${data.id}`;
                navigator.clipboard.writeText(link);
-               alert("Link gekopieerd! Je kunt deze nu delen:\n" + link);
+               showToast(t('app.linkCopied') + " " + link, 'success');
           } else {
               setPublishSuccess(true);
+              showToast(t('app.published'), 'success');
               setTimeout(() => setPublishSuccess(false), 3000);
           }
 
       } catch (err) {
           console.error("Publish error:", err);
-          alert("Fout bij opslaan: " + err.message);
+          showToast(t('app.saveError') + " " + err.message, 'error');
       } finally {
           setPublishing(false);
       }
   };
 
+  const handleRenameBook = async () => {
+      if (!activeItem || selectedType !== 'book') return;
+
+      const newName = prompt(t('app.renamePrompt'), activeItem.name); // Keep prompt for simple rename or make custom dialog? Prompt is okay for now or use confirm? Actually prompt is needed for input.
+      
+      if (!newName) return;
+
+      const validation = validateBookTitle(newName);
+      if (!validation.valid) {
+          showToast(validation.error, 'error');
+          return;
+      }
+
+      // 1. Rename Local State
+      setFiles(prev => prev.map(f => {
+          if (f.id === activeItem.id) {
+              return { ...f, name: newName };
+          }
+          return f;
+      }));
+
+      // 2. Rename in Cloud (if it's a cloud book and user owns it)
+      if (activeItem.isCloud && user && activeItem.ownerId === user.id) {
+          try {
+              const { error } = await supabase
+                .from('books')
+                .update({ title: newName })
+                .eq('id', activeItem.id);
+              
+              if (error) throw error;
+          } catch (err) {
+              console.error("Cloud rename error:", err);
+              showToast(t('app.cloudRenameError') + " " + err.message, 'error');
+          }
+      }
+  };
+
   const handleDeleteBook = async (book) => {
-      if (!confirm("Weet je zeker dat je dit boek wilt verwijderen?")) return;
+      const confirmed = await confirm(t('app.delete'), t('app.deleteConfirm'));
+      if (!confirmed) return;
       
       if (!book.isCloud) {
           setFiles(files.filter(f => f.id !== book.id));
@@ -182,10 +266,10 @@ const App = () => {
           if (error) throw error;
           setFiles(files.filter(f => f.id !== book.id));
           if (selectedId === book.id) setSelectedId(null);
-          alert("Boek verwijderd uit de cloud.");
+          showToast(t('app.deleteCloudConfirm'), 'success');
       } catch (err) {
           console.error(err);
-          alert("Kon boek niet verwijderen. Ben je de eigenaar?");
+          showToast(t('app.deleteError'), 'error');
       }
   };
 
@@ -193,6 +277,7 @@ const App = () => {
       const newBook = {
           id: book.id, 
           name: book.title,
+          author: book.author, // Capture Author
           rawText: "", 
           analysis: typeof book.analysis_json === 'string' ? JSON.parse(book.analysis_json) : book.analysis_json,
           isCloud: true,
@@ -234,7 +319,7 @@ const App = () => {
 
   const createSeries = () => {
       if (selectedForSeries.size < 2) return;
-      const name = prompt("Naam van de nieuwe serie:", "Mijn Trilogie");
+      const name = prompt(t('app.newSeries'), "Mijn Trilogie");
       if (name) {
           const newSeries = { id: Date.now(), name, bookIds: Array.from(selectedForSeries) };
           setSeries(prev => [...prev, newSeries]);
@@ -265,29 +350,54 @@ const App = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 font-sans overflow-hidden transition-colors duration-300">
+      
+      <ToastContainer />
+      <ConfirmDialog />
+
       {/* Header */}
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-20">
+      <header className="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700 px-6 py-4 flex items-center justify-between shadow-sm z-20">
         <div className="flex items-center gap-3 cursor-pointer" onClick={() => setCurrentView('home')}>
-          <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-200">
+          <div className="bg-indigo-600 p-2 rounded-lg shadow-lg shadow-indigo-200 dark:shadow-none">
             <BookOpen className="text-white w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-800">Literaire Diepte Analist 2.1</h1>
-            <p className="text-xs text-slate-500">Met vergelijkende context-engine</p>
+            <h1 className="text-xl font-bold text-slate-800 dark:text-white">{t('app.title')}</h1>
+            <p className="text-xs text-slate-500 dark:text-slate-400">{t('app.subtitle')}</p>
           </div>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex gap-2 items-center">
+            
+            {/* Theme Toggle */}
+            <button
+                onClick={toggleTheme}
+                className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 transition-colors"
+                title={theme === 'light' ? 'Dark Mode' : 'Light Mode'}
+            >
+                {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+            </button>
+
+            {/* Language Switch */}
+            <button
+                onClick={() => switchLanguage(language === 'nl' ? 'en' : 'nl')}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-slate-600 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 font-medium text-xs border border-slate-200 dark:border-slate-600 ml-1 mr-2"
+            >
+                <span className="text-lg">{language === 'nl' ? '🇳🇱' : '🇬🇧'}</span>
+                <span>{language.toUpperCase()}</span>
+            </button>
+
+            <div className="w-px h-6 bg-slate-200 dark:bg-slate-700 mx-1"></div>
+
             <button 
                 onClick={() => setCurrentView('home')}
                 className={clsx(
                     "flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all font-medium text-sm",
-                    currentView === 'home' ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:text-slate-700"
+                    currentView === 'home' ? "bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white" : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                 )}
             >
                 <Home className="w-4 h-4" />
-                <span>Home</span>
+                <span className="hidden md:inline">{t('app.home')}</span>
             </button>
 
             {/* Auth Button */}
@@ -296,11 +406,11 @@ const App = () => {
                     onClick={() => setCurrentView('profile')}
                     className={clsx(
                         "flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all font-medium text-sm",
-                        currentView === 'profile' ? "bg-slate-100 text-slate-900" : "text-slate-500 hover:text-slate-700"
+                        currentView === 'profile' ? "bg-slate-100 dark:bg-slate-700 text-slate-900 dark:text-white" : "text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
                     )}
                 >
                     <UserIcon className="w-4 h-4" />
-                    <span>Mijn Profiel</span>
+                    <span className="hidden md:inline">{t('app.profile')}</span>
                 </button>
             ) : (
                 <button 
@@ -309,23 +419,23 @@ const App = () => {
                         "flex items-center gap-2 px-4 py-2.5 rounded-lg transition-all font-medium text-sm shadow-md",
                         currentView === 'login' 
                             ? "bg-slate-700 text-white" 
-                            : "bg-slate-800 text-white hover:bg-slate-700"
+                            : "bg-slate-800 text-white hover:bg-slate-700 dark:bg-slate-600 dark:hover:bg-slate-500"
                     )}
                 >
                     <UserIcon className="w-4 h-4" />
-                    <span>Inloggen</span>
+                    <span>{t('app.login')}</span>
                 </button>
             )}
 
-            <div className="w-px bg-slate-200 mx-1"></div>
+            <div className="w-px bg-slate-200 dark:bg-slate-700 mx-1"></div>
 
             {currentView === 'dashboard' && !selectionMode && (
                  <button 
                     onClick={() => setSelectionMode(true)}
-                    className="flex items-center gap-2 bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 px-4 py-2.5 rounded-lg transition-all font-medium text-sm"
+                    className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 px-4 py-2.5 rounded-lg transition-all font-medium text-sm hidden md:flex"
                 >
                     <Layers className="w-4 h-4" />
-                    <span>Nieuwe Serie...</span>
+                    <span>{t('app.newSeries')}</span>
                 </button>
             )}
 
@@ -333,9 +443,9 @@ const App = () => {
                 <>
                      <button 
                         onClick={() => setSelectionMode(false)}
-                        className="text-slate-500 hover:text-slate-700 px-4 text-sm"
+                        className="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 px-4 text-sm"
                     >
-                        Annuleren
+                        {t('app.cancel')}
                     </button>
                     <button 
                         onClick={createSeries}
@@ -343,14 +453,14 @@ const App = () => {
                         className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg transition-all font-medium text-sm shadow-md"
                     >
                         <Plus className="w-4 h-4" />
-                        <span>Maak Serie ({selectedForSeries.size})</span>
+                        <span>{t('app.createSeries')} ({selectedForSeries.size})</span>
                     </button>
                 </>
             )}
 
             <label className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg cursor-pointer transition-all shadow-md active:scale-95 font-medium">
             <Upload className="w-4 h-4" />
-            <span>Upload Boek</span>
+            <span className="hidden md:inline">{t('app.upload')}</span>
             <input type="file" multiple onChange={handleFileUpload} className="hidden" accept=".txt,.md,.pdf,.epub" />
             </label>
         </div>
@@ -366,13 +476,13 @@ const App = () => {
       )}
 
       {currentView === 'profile' && user && (
-          <div className="flex-1 overflow-y-auto bg-slate-50">
+          <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-900">
              <ProfilePage user={user} onViewBook={handleViewCloudBook} />
           </div>
       )}
 
       {currentView === 'home' && (
-          <div className="flex-1 overflow-y-auto bg-slate-50">
+          <div className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-900">
               <HomePage 
                 onViewBook={handleViewCloudBook} 
                 onUploadClick={() => document.querySelector('input[type=file]').click()} 
@@ -383,11 +493,11 @@ const App = () => {
       {currentView === 'dashboard' && (
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}
-        <div className="w-72 bg-slate-100 border-r border-slate-200 flex flex-col z-10 hidden md:flex">
+        <div className="w-72 bg-slate-100 dark:bg-slate-800 border-r border-slate-200 dark:border-slate-700 flex flex-col z-10 hidden md:flex">
           {series.length > 0 && (
              <div className="mb-2">
-                <div className="p-4 py-3 border-b border-slate-200">
-                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Series</h2>
+                <div className="p-4 py-3 border-b border-slate-200 dark:border-slate-700">
+                    <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">{t('app.series')}</h2>
                 </div>
                 <div className="p-2 space-y-1">
                     {series.map(s => (
@@ -396,12 +506,14 @@ const App = () => {
                             onClick={() => { setSelectedId(s.id); setSelectedType('series'); }}
                             className={clsx(
                             "w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all cursor-pointer",
-                            selectedType === 'series' && selectedId === s.id ? 'bg-white shadow-sm ring-1 ring-indigo-200 border-l-4 border-l-indigo-500' : 'hover:bg-slate-200 border-l-4 border-l-transparent'
+                            selectedType === 'series' && selectedId === s.id 
+                                ? 'bg-white dark:bg-slate-700 shadow-sm ring-1 ring-indigo-200 dark:ring-indigo-900 border-l-4 border-l-indigo-500' 
+                                : 'hover:bg-slate-200 dark:hover:bg-slate-700 border-l-4 border-l-transparent'
                             )}
                         >
                             <FolderOpen className="w-4 h-4 text-indigo-400" />
                             <div className="flex-1 min-w-0">
-                                <p className="font-medium truncate text-sm text-indigo-900">{s.name}</p>
+                                <p className="font-medium truncate text-sm text-indigo-900 dark:text-indigo-100">{s.name}</p>
                                 <p className="text-xs text-slate-400">{s.bookIds.length} boeken</p>
                             </div>
                         </div>
@@ -410,14 +522,14 @@ const App = () => {
              </div>
           )}
 
-          <div className="p-4 py-3 border-b border-slate-200">
-            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Bibliotheek</h2>
+          <div className="p-4 py-3 border-b border-slate-200 dark:border-slate-700">
+            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-wider">{t('app.library')}</h2>
           </div>
           <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {files.length === 0 && (
               <div className="text-center p-6 text-slate-400">
                 <FileText className="w-8 h-8 mx-auto mb-2 opacity-30" />
-                <p className="text-sm">Geen boeken in sessie.</p>
+                <p className="text-sm">{t('app.noBooks')}</p>
               </div>
             )}
             {files.map(file => (
@@ -430,8 +542,10 @@ const App = () => {
                 role="button"
                 className={clsx(
                    "w-full text-left p-3 rounded-lg flex items-center gap-3 transition-all cursor-pointer relative",
-                   selectionMode && selectedForSeries.has(file.id) ? 'bg-indigo-50 border-l-4 border-l-indigo-400' : '',
-                   !selectionMode && selectedType === 'book' && selectedId === file.id ? 'bg-white shadow-sm ring-1 ring-indigo-200 border-l-4 border-l-indigo-500' : 'hover:bg-slate-200 border-l-4 border-l-transparent'
+                   selectionMode && selectedForSeries.has(file.id) ? 'bg-indigo-50 dark:bg-indigo-900/30 border-l-4 border-l-indigo-400' : '',
+                   !selectionMode && selectedType === 'book' && selectedId === file.id 
+                        ? 'bg-white dark:bg-slate-700 shadow-sm ring-1 ring-indigo-200 dark:ring-indigo-900 border-l-4 border-l-indigo-500' 
+                        : 'hover:bg-slate-200 dark:hover:bg-slate-700 border-l-4 border-l-transparent'
                 )}
               >
                 {selectionMode && (
@@ -445,14 +559,14 @@ const App = () => {
                 {file.isCloud && <Globe className="w-3 h-3 text-indigo-400 absolute top-3 right-3" />}
                 <div className="flex-1 min-w-0">
                   <div className="flex justify-between items-center mb-0.5">
-                    <p className={clsx("font-medium truncate text-sm flex-1", selectedId === file.id ? 'text-indigo-900' : 'text-slate-700')}>{file.name}</p>
+                    <p className={clsx("font-medium truncate text-sm flex-1", selectedId === file.id ? 'text-indigo-900 dark:text-indigo-100' : 'text-slate-700 dark:text-slate-300')}>{file.name}</p>
                     {file.analysis.lang && (
-                        <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 ml-2">
+                        <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-600 text-slate-600 dark:text-slate-300 ml-2">
                             {file.analysis.lang}
                         </span>
                     )}
                   </div>
-                  <p className="text-xs text-slate-400">{file.analysis.meta.wordCount.toLocaleString()} woorden</p>
+                  <p className="text-xs text-slate-400">{file.analysis.meta.wordCount.toLocaleString()} {t('app.words')}</p>
                 </div>
                 {!selectionMode && selectedId === file.id && !file.isCloud && (
                   <button onClick={(e) => { e.stopPropagation(); setFiles(files.filter(f => f.id !== file.id)); }} className="text-slate-400 hover:text-red-500 absolute bottom-3 right-3">
@@ -465,16 +579,16 @@ const App = () => {
         </div>
 
         {/* Main Content */}
-        <main className="flex-1 overflow-y-auto bg-slate-50 relative">
+        <main className="flex-1 overflow-y-auto bg-slate-50 dark:bg-slate-900 relative">
           {analyzing ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 z-50 backdrop-blur-sm">
-              <div className="animate-spin rounded-full h-12 w-12 border-4 border-indigo-200 border-t-indigo-600 mb-4"></div>
-              <p className="text-indigo-800 font-medium">Analyseren en vergelijken...</p>
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/80 dark:bg-slate-900/80 z-50 backdrop-blur-sm">
+              <div className="animate-spin rounded-full h-12 w-12 border-4 border-indigo-200 dark:border-indigo-900 border-t-indigo-600 dark:border-t-indigo-400 mb-4"></div>
+              <p className="text-indigo-800 dark:text-indigo-200 font-medium">{t('app.analyzing')}</p>
             </div>
           ) : !activeItem ? (
-            <div className="h-full flex flex-col items-center justify-center text-slate-400">
+            <div className="h-full flex flex-col items-center justify-center text-slate-400 dark:text-slate-500">
               <Layers className="w-20 h-20 mb-4 opacity-10 text-indigo-500" />
-              <p className="text-xl font-medium text-slate-500">Kies een boek of serie om te beginnen</p>
+              <p className="text-xl font-medium text-slate-500 dark:text-slate-400">{t('app.chooseBook')}</p>
             </div>
           ) : selectedType === 'series' ? (
               <div className="p-8 max-w-7xl mx-auto">
@@ -488,13 +602,13 @@ const App = () => {
             <div className="p-8 max-w-7xl mx-auto space-y-6">
               
               {/* Top Navigation & Language & Tools */}
-              <div className="flex flex-col md:flex-row gap-4 justify-between items-end border-b border-slate-200 pb-1">
+              <div className="flex flex-col md:flex-row gap-4 justify-between items-end border-b border-slate-200 dark:border-slate-700 pb-1">
                 <div className="flex gap-2 overflow-x-auto w-full md:w-auto">
                     {[
-                    { id: 'dashboard', label: 'Dashboard' },
-                    { id: 'sentiment', label: 'Sentiment' },
-                    { id: 'structure', label: 'Structuur' },
-                    { id: 'characters', label: 'Karakters' }
+                    { id: 'dashboard', label: t('tabs.dashboard') },
+                    { id: 'sentiment', label: t('tabs.sentiment') },
+                    { id: 'structure', label: t('tabs.structure') },
+                    { id: 'characters', label: t('tabs.characters') }
                     ].map(tab => (
                     <button
                         key={tab.id}
@@ -502,8 +616,8 @@ const App = () => {
                         className={clsx(
                         "px-4 py-2 text-sm font-medium rounded-t-lg transition-colors whitespace-nowrap",
                         activeTab === tab.id
-                            ? 'bg-white text-indigo-600 border border-slate-200 border-b-white -mb-[1px]' 
-                            : 'text-slate-500 hover:text-slate-700 hover:bg-slate-100'
+                            ? 'bg-white dark:bg-slate-800 text-indigo-600 dark:text-indigo-400 border border-slate-200 dark:border-slate-700 border-b-white dark:border-b-slate-800 -mb-[1px]' 
+                            : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
                         )}
                     >
                         {tab.label}
@@ -512,24 +626,34 @@ const App = () => {
                 </div>
 
                 <div className="flex items-center gap-2 mb-2">
+                    {/* Rename Button */}
+                    <button
+                        onClick={handleRenameBook}
+                        disabled={activeItem.isCloud && (!user || activeItem.ownerId !== user.id)}
+                        title={t('app.rename')}
+                        className="p-1.5 rounded-md text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 disabled:opacity-30 transition-all border border-transparent hover:border-slate-200 dark:hover:border-slate-600"
+                    >
+                        <Edit2 className="w-4 h-4" />
+                    </button>
+
                     {/* Delete Cloud Book Button */}
                     {activeItem.isCloud && user && activeItem.ownerId === user.id && (
                         <button 
                             onClick={() => handleDeleteBook(activeItem)}
-                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold text-red-500 hover:bg-red-50 border border-red-200"
+                            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 border border-red-200 dark:border-red-800"
                         >
                             <Trash2 className="w-4 h-4" />
-                            Verwijderen
+                            {t('app.delete')}
                         </button>
                     )}
 
                     {/* Share Button (Private Link) */}
                     <button 
                         onClick={() => handleSaveToCloud(false)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide bg-slate-100 text-slate-700 hover:bg-slate-200 transition-all border border-slate-200"
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-all border border-slate-200 dark:border-slate-600"
                     >
                         <Share2 className="w-4 h-4" />
-                        Delen (Link)
+                        {t('app.share')}
                     </button>
 
                     {/* Publish Button (Public Feed) */}
@@ -538,21 +662,21 @@ const App = () => {
                         disabled={publishing || publishSuccess}
                         className={clsx(
                             "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-bold uppercase tracking-wide transition-all",
-                            publishSuccess ? "bg-green-100 text-green-700 cursor-default" : "bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                            publishSuccess ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 cursor-default" : "bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-900/50"
                         )}
                     >
                         {publishing ? <span className="animate-spin">⌛</span> : publishSuccess ? <Check className="w-4 h-4" /> : <Globe className="w-4 h-4" />}
-                        {publishing ? "Bezig..." : publishSuccess ? "Gepubliceerd!" : "Publiceren"}
+                        {publishing ? t('app.publishing') : publishSuccess ? t('app.published') : t('app.publish')}
                     </button>
 
-                    <div className="w-px h-6 bg-slate-300 mx-2"></div>
+                    <div className="w-px h-6 bg-slate-300 dark:bg-slate-600 mx-2"></div>
 
                     <Globe className="w-4 h-4 text-slate-400" />
                     <select 
                         value={activeItem.analysis.lang} 
                         onChange={(e) => handleLanguageChange(activeItem.id, e.target.value)}
                         disabled={activeItem.isCloud}
-                        className="bg-white border border-slate-300 text-slate-700 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-1.5 cursor-pointer hover:bg-slate-50 disabled:opacity-50"
+                        className="bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm rounded-md focus:ring-indigo-500 focus:border-indigo-500 block p-1.5 cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-700 disabled:opacity-50"
                     >
                         {Object.entries(LANGUAGES).map(([code, name]) => (
                             <option key={code} value={code}>{name}</option>
@@ -594,6 +718,13 @@ const App = () => {
             />
         )}
       </Modal>
+
+      <PublishModal 
+          isOpen={publishModalOpen} 
+          onClose={() => setPublishModalOpen(false)} 
+          book={activeItem} 
+          onConfirm={handleConfirmPublish}
+      />
     </div>
   );
 };
