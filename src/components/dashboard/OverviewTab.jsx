@@ -131,7 +131,7 @@ const OverviewTab = ({ activeBook, onStatClick }) => {
         {/* Word Cloud / Frequency */}
         <div className="bg-white p-6 rounded-xl border border-slate-200 shadow-sm lg:col-span-2 flex flex-col">
           <h3 className="font-bold text-slate-800 mb-4">Dominante Woorden (Kernwoorden)</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
             {activeBook.analysis.visuals.topWords.map((w, i) => (
               <div key={i} className="flex items-center justify-between bg-slate-50 p-2 rounded border border-slate-100 hover:border-indigo-200 transition-colors">
                 <span className="text-sm font-medium text-slate-700 truncate mr-2">{w.text}</span>

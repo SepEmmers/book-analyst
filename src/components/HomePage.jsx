@@ -63,9 +63,9 @@ const HomePage = ({ onViewBook, onUploadClick }) => {
       {/* Hero Section */}
       <div className="flex flex-col md:flex-row justify-between items-center gap-8 bg-gradient-to-br from-indigo-600 to-violet-600 p-10 rounded-3xl shadow-xl text-white relative overflow-hidden">
         <div className="relative z-10 max-w-xl space-y-4">
-            <h1 className="text-4xl font-extrabold tracking-tight">Ontdek de diepgang van literatuur.</h1>
+            <h1 className="text-4xl font-extrabold tracking-tight">LexiMind: Unlock the power of text.</h1>
             <p className="text-indigo-100 text-lg leading-relaxed">
-                Een community-platform voor tekstanalyse. Deel jouw analyses, ontdek nieuwe inzichten en vergelijk boeken.
+                Platform voor geavanceerde tekstanalyse. Deel je inzichten, vergelijk boeken en ontdek verborgen patronen.
             </p>
             <button 
                 onClick={onUploadClick}

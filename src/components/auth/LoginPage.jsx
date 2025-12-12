@@ -109,9 +109,39 @@ const LoginPage = ({ onLoginSuccess, switchToHome }) => {
               </div>
             </div>
 
+            {/* Google Login Button */}
+             <button
+                type="button"
+                onClick={async () => {
+                    setLoading(true);
+                    try {
+                        const { error } = await supabase.auth.signInWithOAuth({
+                            provider: 'google',
+                            options: {
+                                redirectTo: window.location.origin
+                            }
+                        });
+                        if (error) throw error;
+                    } catch (err) {
+                        setError(err.message);
+                        setLoading(false);
+                    }
+                }}
+                className="w-full bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold py-3.5 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 mb-4"
+             >
+                <img src="https://www.google.com/favicon.ico" alt="Google" className="w-5 h-5" />
+                <span>Doorgaan met Google</span>
+             </button>
+
+            <div className="flex items-center gap-4 mb-6">
+                <div className="h-px bg-slate-200 flex-1"></div>
+                <span className="text-xs text-slate-400 font-bold uppercase">Of met email</span>
+                <div className="h-px bg-slate-200 flex-1"></div>
+            </div>
+
             {!useMagicLink && (
               <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">Constructor Wachtwoord</label>
+                <label className="block text-sm font-bold text-slate-700 dark:text-slate-200 mb-1">Gebruikersnaam / Password</label>
                 <div className="relative">
                   <Lock className="absolute left-3 top-3.5 w-5 h-5 text-slate-400" />
                   <input
@@ -120,7 +150,7 @@ const LoginPage = ({ onLoginSuccess, switchToHome }) => {
                     minLength={6}
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
+                    className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all dark:bg-slate-900 dark:border-slate-700 dark:text-white"
                     placeholder="••••••••"
                   />
                 </div>

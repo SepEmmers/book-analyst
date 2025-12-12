@@ -2,8 +2,8 @@
 export const translations = {
   nl: {
     app: {
-      title: "Literaire Diepte Analist 2.1",
-      subtitle: "Met vergelijkende context-engine",
+      title: "LexiMind",
+      subtitle: "AI Text Analysis Platform",
       home: "Home",
       profile: "Mijn Profiel",
       login: "Inloggen",
@@ -91,8 +91,8 @@ export const translations = {
   },
   en: {
     app: {
-      title: "Literary Depth Analyst 2.1",
-      subtitle: "With comparative context engine",
+      title: "LexiMind",
+      subtitle: "AI Text Analysis Platform",
       home: "Home",
       profile: "My Profile",
       login: "Login",
